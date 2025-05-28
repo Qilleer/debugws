@@ -4,7 +4,8 @@ const {
   generatePairingCode, 
   logoutWhatsApp,
   toggleAutoAccept,
-  getAutoAcceptStatus 
+  getAutoAcceptStatus,
+  restoreAllSessions 
 } = require('./whatsappClient');
 const config = require('./config');
 
@@ -15,6 +16,36 @@ const userStates = {};
 // Check if owner
 function isOwner(userId) {
   return config.telegram.owners.includes(userId.toString());
+}
+
+// Initialize bot - restore sessions on startup
+async function initializeBot() {
+  console.log('🔄 Restoring existing sessions...');
+  
+  try {
+    const restoredSessions = await restoreAllSessions(bot);
+    
+    if (restoredSessions.length > 0) {
+      console.log(`✅ Restored ${restoredSessions.length} sessions:`, restoredSessions);
+      
+      // Notify owners about restored sessions
+      for (const ownerId of config.telegram.owners) {
+        try {
+          await bot.sendMessage(
+            ownerId, 
+            `🚀 *Bot Started!*\n\n✅ Restored ${restoredSessions.length} WhatsApp session(s)\n\nBot siap digunakan!`,
+            { parse_mode: 'Markdown' }
+          );
+        } catch (err) {
+          console.warn(`Could not notify owner ${ownerId}:`, err.message);
+        }
+      }
+    } else {
+      console.log('ℹ️ No existing sessions found');
+    }
+  } catch (err) {
+    console.error('❌ Error restoring sessions:', err.message);
+  }
 }
 
 // Handle /start
@@ -79,6 +110,12 @@ bot.on('callback_query', async (query) => {
 
 // Handle login
 async function handleLogin(chatId, userId) {
+  // Check if already connected
+  if (userStates[userId]?.whatsapp?.isConnected) {
+    await bot.sendMessage(chatId, '✅ WhatsApp sudah terhubung! Ga perlu login lagi.');
+    return;
+  }
+  
   if (!userStates[userId]) {
     userStates[userId] = {};
   }
@@ -196,10 +233,15 @@ async function handleToggleAutoAccept(chatId, userId, messageId) {
 async function handleStatus(chatId, userId) {
   const isConnected = userStates[userId]?.whatsapp?.isConnected || false;
   const autoAcceptStatus = getAutoAcceptStatus(userId);
+  const lastConnect = userStates[userId]?.whatsapp?.lastConnect;
   
   let message = '*📊 Status Bot*\n\n';
   message += `WhatsApp: ${isConnected ? '✅ Connected' : '❌ Disconnected'}\n`;
   message += `Auto Accept: ${autoAcceptStatus.enabled ? '✅ ON' : '❌ OFF'}\n`;
+  
+  if (lastConnect) {
+    message += `Last Connect: ${lastConnect.toLocaleString('id-ID')}\n`;
+  }
   
   await bot.sendMessage(chatId, message, {
     parse_mode: 'Markdown',
@@ -230,7 +272,9 @@ async function handleLogout(chatId, userId) {
 
 // Show main menu
 async function showMainMenu(chatId, messageId = null) {
-  const menuText = '👋 *Welcome to Auto Accept Bot!*\n\nPilih menu:';
+  const isConnected = userStates[chatId]?.whatsapp?.isConnected || false;
+  
+  const menuText = `👋 *Welcome to Auto Accept Bot!*\n\nStatus: ${isConnected ? '✅ Connected' : '❌ Disconnected'}\n\nPilih menu:`;
   const keyboard = {
     inline_keyboard: [
       [{ text: '🔑 Login WhatsApp', callback_data: 'login' }],
@@ -258,4 +302,9 @@ async function showMainMenu(chatId, messageId = null) {
 // Export userStates for whatsappClient
 module.exports = { userStates };
 
-console.log('✅ Bot started! Send /start to begin.');
+// Initialize bot with session restore
+initializeBot().then(() => {
+  console.log('✅ Bot started! Send /start to begin.');
+}).catch(err => {
+  console.error('❌ Bot initialization failed:', err);
+});
