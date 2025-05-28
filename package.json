@@ -1,0 +1,17 @@
+{
+  "name": "whatsapp-auto-accept-bot",
+  "version": "1.0.0",
+  "description": "Bot WhatsApp Auto Accept via Telegram",
+  "main": "index.js",
+  "scripts": {
+    "start": "node index.js"
+  },
+  "author": "Qiventory",
+  "license": "MIT",
+  "dependencies": {
+    "@whiskeysockets/baileys": "^6.7.17",
+    "node-telegram-bot-api": "^0.63.0",
+    "pino": "^8.15.0",
+    "qrcode": "^1.5.4"
+  }
+}
