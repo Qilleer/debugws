@@ -13,6 +13,145 @@ function getUserStates() {
 const reconnectAttempts = {};
 const MAX_RECONNECT_ATTEMPTS = 3;
 
+// Get all groups from WhatsApp
+async function getAllGroups(userId) {
+  const userStates = getUserStates();
+  
+  try {
+    const sock = userStates[userId]?.whatsapp?.socket;
+    
+    if (!sock || !userStates[userId]?.whatsapp?.isConnected) {
+      throw new Error('WhatsApp tidak terhubung');
+    }
+    
+    console.log(`[DEBUG][${userId}] Getting all groups...`);
+    
+    // Get all groups
+    const groups = await sock.groupFetchAllParticipating();
+    const groupList = [];
+    
+    for (const groupId in groups) {
+      const group = groups[groupId];
+      
+      // Only include groups where bot is participant
+      if (group.participants && group.participants.length > 0) {
+        groupList.push({
+          id: groupId,
+          name: group.subject || 'Unnamed Group',
+          participantCount: group.participants.length,
+          isAdmin: group.participants.some(p => {
+            const botJid = sock.user.id;
+            const botLid = sock.user.lid;
+            
+            // Check if participant has admin role
+            const hasAdminRole = p.admin === 'admin' || p.admin === 'superadmin';
+            if (!hasAdminRole) return false;
+            
+            // Try exact match with JID or number-only match
+            const botNumber = botJid.split('@')[0].split(':')[0];
+            const botLidNumber = botLid ? botLid.split('@')[0].split(':')[0] : null;
+            const participantNumber = p.id.split('@')[0].split(':')[0];
+            
+            return p.id === botJid || 
+                   (botLid && p.id === botLid) ||
+                   botNumber === participantNumber ||
+                   (botLidNumber && botLidNumber === participantNumber);
+          })
+        });
+      }
+    }
+    
+    console.log(`[DEBUG][${userId}] Found ${groupList.length} groups`);
+    
+    // Sort by name
+    groupList.sort((a, b) => a.name.localeCompare(b.name));
+    
+    return groupList;
+  } catch (err) {
+    console.error(`[ERROR][${userId}] Error getting groups:`, err);
+    throw err;
+  }
+}
+
+// Rename a group
+async function renameGroup(userId, groupId, newName) {
+  const userStates = getUserStates();
+  
+  try {
+    const sock = userStates[userId]?.whatsapp?.socket;
+    
+    if (!sock || !userStates[userId]?.whatsapp?.isConnected) {
+      throw new Error('WhatsApp tidak terhubung');
+    }
+    
+    console.log(`[DEBUG][${userId}] Renaming group ${groupId} to "${newName}"`);
+    
+    // Check connection status dulu
+    if (!sock.user || !sock.user.id) {
+      throw new Error('Socket user tidak tersedia');
+    }
+    
+    // Check if bot is admin in this group
+    const groups = await sock.groupFetchAllParticipating();
+    const group = groups[groupId];
+    
+    if (!group) {
+      throw new Error('Grup tidak ditemukan');
+    }
+    
+    console.log(`[DEBUG][${userId}] Group found: ${group.subject}, participants: ${group.participants.length}`);
+    
+    const botJid = sock.user.id;
+    const botLid = sock.user.lid;
+    
+    console.log(`[DEBUG][${userId}] Bot JID: ${botJid}, Bot LID: ${botLid}`);
+    
+    const isAdmin = group.participants.some(p => {
+      const hasAdminRole = p.admin === 'admin' || p.admin === 'superadmin';
+      if (!hasAdminRole) return false;
+      
+      const botNumber = botJid.split('@')[0].split(':')[0];
+      const botLidNumber = botLid ? botLid.split('@')[0].split(':')[0] : null;
+      const participantNumber = p.id.split('@')[0].split(':')[0];
+      
+      const isMatch = p.id === botJid || 
+             (botLid && p.id === botLid) ||
+             botNumber === participantNumber ||
+             (botLidNumber && botLidNumber === participantNumber);
+             
+      if (isMatch) {
+        console.log(`[DEBUG][${userId}] Admin match found: ${p.id} (${p.admin})`);
+      }
+      
+      return isMatch;
+    });
+    
+    console.log(`[DEBUG][${userId}] Is admin: ${isAdmin}`);
+    
+    if (!isAdmin) {
+      throw new Error('Bot bukan admin di grup ini');
+    }
+    
+    // Rename the group dengan timeout
+    console.log(`[DEBUG][${userId}] Attempting to rename group...`);
+    
+    const renamePromise = sock.groupUpdateSubject(groupId, newName);
+    const timeoutPromise = new Promise((_, reject) => 
+      setTimeout(() => reject(new Error('Rename timeout')), 15000) // 15 detik timeout
+    );
+    
+    await Promise.race([renamePromise, timeoutPromise]);
+    
+    console.log(`[DEBUG][${userId}] Successfully renamed group ${groupId} to "${newName}"`);
+    
+    return true;
+  } catch (err) {
+    console.error(`[ERROR][${userId}] Error renaming group ${groupId}:`, err);
+    console.error(`[ERROR][${userId}] Full error:`, JSON.stringify(err, null, 2));
+    throw err;
+  }
+}
+
 // Check and approve pending join requests - Alternative approach
 async function checkPendingRequests(userId, sock) {
   const userStates = getUserStates();
@@ -189,7 +328,7 @@ async function restoreAllSessions(bot) {
           console.log(`✅ Session restored for userId: ${userId}`);
           
           // Wait a bit between connections to avoid rate limits
-          await new Promise(resolve => setTimeout(resolve, 2000));
+          await new Promise(resolve => setTimeout(resolve, 1000));
         } else {
           console.log(`❌ Failed to restore session for userId: ${userId}`);
         }
@@ -668,65 +807,67 @@ async function toggleAutoAccept(userId, enabled) {
   
   // Re-setup handler if enabling
   if (enabled && userStates[userId].whatsapp?.isConnected) {
-    setupAutoAcceptHandler(userId);
-  }
-  
-  // Check pending requests if enabling auto accept
-  if (enabled && userStates[userId].whatsapp?.isConnected) {
-    const sock = userStates[userId].whatsapp.socket;
-    if (sock) {
-      setTimeout(async () => {
-        await checkPendingRequests(userId, sock);
-      }, 1000);
-    }
-  }
-  
-  return { success: true, enabled };
+   setupAutoAcceptHandler(userId);
+ }
+ 
+ // Check pending requests if enabling auto accept
+ if (enabled && userStates[userId].whatsapp?.isConnected) {
+   const sock = userStates[userId].whatsapp.socket;
+   if (sock) {
+     setTimeout(async () => {
+       await checkPendingRequests(userId, sock);
+     }, 1000);
+   }
+ }
+ 
+ return { success: true, enabled };
 }
 
 // Get auto accept status
 function getAutoAcceptStatus(userId) {
-  const userStates = getUserStates();
-  return {
-    enabled: userStates[userId]?.autoAccept?.enabled || false
-  };
+ const userStates = getUserStates();
+ return {
+   enabled: userStates[userId]?.autoAccept?.enabled || false
+ };
 }
 
 // Logout WhatsApp
 async function logoutWhatsApp(userId) {
-  const userStates = getUserStates();
-  
-  try {
-    // Logout if connected
-    if (userStates[userId]?.whatsapp?.socket) {
-      await userStates[userId].whatsapp.socket.logout();
-    }
-    
-    // Delete session files
-    const sessionPath = path.join(config.whatsapp.sessionPath, `wa_${userId}`);
-    if (fs.existsSync(sessionPath)) {
-      fs.rmSync(sessionPath, { recursive: true, force: true });
-    }
-    
-    // Clear state
-    delete userStates[userId];
-    
-    // Reset reconnect attempts
-    reconnectAttempts[userId] = 0;
-    
-    return true;
-  } catch (err) {
-    console.error('Error logging out:', err);
-    return false;
-  }
+ const userStates = getUserStates();
+ 
+ try {
+   // Logout if connected
+   if (userStates[userId]?.whatsapp?.socket) {
+     await userStates[userId].whatsapp.socket.logout();
+   }
+   
+   // Delete session files
+   const sessionPath = path.join(config.whatsapp.sessionPath, `wa_${userId}`);
+   if (fs.existsSync(sessionPath)) {
+     fs.rmSync(sessionPath, { recursive: true, force: true });
+   }
+   
+   // Clear state
+   delete userStates[userId];
+   
+   // Reset reconnect attempts
+   reconnectAttempts[userId] = 0;
+   
+   return true;
+ } catch (err) {
+   console.error('Error logging out:', err);
+   return false;
+ }
 }
 
 module.exports = {
-  createWhatsAppConnection,
-  generatePairingCode,
-  toggleAutoAccept,
-  getAutoAcceptStatus,
-  logoutWhatsApp,
-  restoreAllSessions,
-  checkPendingRequests
+ createWhatsAppConnection,
+ generatePairingCode,
+ toggleAutoAccept,
+ getAutoAcceptStatus,
+ logoutWhatsApp,
+ restoreAllSessions,
+ checkPendingRequests,
+ getAllGroups,
+ renameGroup
 };
