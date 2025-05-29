@@ -19,15 +19,12 @@ async function restoreAllSessions(bot) {
   const restoredSessions = [];
   
   if (!fs.existsSync(sessionsPath)) {
-    console.log('No sessions directory found');
     return restoredSessions;
   }
   
   try {
     const sessionDirs = fs.readdirSync(sessionsPath)
       .filter(dir => dir.startsWith('wa_') && fs.statSync(path.join(sessionsPath, dir)).isDirectory());
-    
-    console.log(`Found ${sessionDirs.length} potential sessions:`, sessionDirs);
     
     for (const sessionDir of sessionDirs) {
       try {
@@ -39,32 +36,25 @@ async function restoreAllSessions(bot) {
         const credsFile = path.join(sessionPath, 'creds.json');
         
         if (!fs.existsSync(credsFile)) {
-          console.log(`Skipping ${sessionDir} - no creds.json found`);
           continue;
         }
-        
-        console.log(`Restoring session for userId: ${userId}`);
         
         // Create connection for this user
         const sock = await createWhatsAppConnection(userId, bot, false, true);
         
         if (sock) {
           restoredSessions.push(userId);
-          console.log(`✅ Session restored for userId: ${userId}`);
           
           // Wait a bit between connections to avoid rate limits
           await new Promise(resolve => setTimeout(resolve, 2000));
-        } else {
-          console.log(`❌ Failed to restore session for userId: ${userId}`);
         }
       } catch (err) {
-        console.error(`Error restoring session ${sessionDir}:`, err.message);
+        // Silent fail
       }
     }
     
     return restoredSessions;
   } catch (err) {
-    console.error('Error scanning sessions directory:', err);
     return restoredSessions;
   }
 }
@@ -95,17 +85,6 @@ async function createWhatsAppConnection(userId, bot, reconnect = false, isRestor
       retryRequestDelayMs: 5000
     });
     
-    // Log all events for debugging (compatible version)
-    sock.ev.process(
-      async (events) => {
-        for (const key in events) {
-          if (events[key]) {
-            console.log(`[DEBUG][${userId}][process] Event:`, key, JSON.stringify(events[key], null, 2));
-          }
-        }
-      }
-    );
-    
     // Save user state
     const userStates = getUserStates();
     
@@ -134,7 +113,7 @@ async function createWhatsAppConnection(userId, bot, reconnect = false, isRestor
           const settings = JSON.parse(fs.readFileSync(settingsPath, 'utf8'));
           autoAcceptEnabled = settings.autoAccept || false;
         } catch (err) {
-          console.warn(`Error loading settings for ${userId}:`, err.message);
+          // Silent fail
         }
       }
       
@@ -150,15 +129,12 @@ async function createWhatsAppConnection(userId, bot, reconnect = false, isRestor
     sock.ev.on('connection.update', async (update) => {
       const { connection, lastDisconnect, qr } = update;
       
-      console.log(`[DEBUG] Connection update for ${userId}: ${connection}`);
-      
       // Handle QR code if available (only for new sessions)
       if (qr && !isExistingSession && userStates[userId]?.whatsapp?.isWaitingForQR) {
         const now = Date.now();
         const lastQRTime = userStates[userId].whatsapp.lastQRTime || 0;
         
         if (now - lastQRTime < 30000) {
-          console.log(`[DEBUG] Skipping QR code for ${userId} - too soon since last QR`);
           return;
         }
         
@@ -172,17 +148,12 @@ async function createWhatsAppConnection(userId, bot, reconnect = false, isRestor
             caption: "🔒 *Scan QR Code ini dengan WhatsApp*\n\nBuka WhatsApp > Menu > Perangkat Tertaut > Tautkan Perangkat\n\nQR code valid selama 60 detik!",
             parse_mode: 'Markdown'
           });
-          
-          console.log(`[DEBUG] Sent QR code to user ${userId}`);
         } catch (qrErr) {
-          console.error(`[ERROR] Failed to send QR code: ${qrErr.message}`);
           await bot.sendMessage(userId, "❌ Error saat mengirim QR code. Coba lagi nanti.");
         }
       }
       
       if (connection === "open") {
-        console.log(`WhatsApp connection open for user: ${userId}`);
-        
         // Reset reconnect attempts
         reconnectAttempts[userId] = 0;
         
@@ -203,7 +174,7 @@ async function createWhatsAppConnection(userId, bot, reconnect = false, isRestor
         
         // Send success message
         if (isRestore) {
-          console.log(`Session restored for userId: ${userId}`);
+          // Silent for restore
         } else if (reconnect) {
           await bot.sendMessage(
             userId,
@@ -225,8 +196,6 @@ async function createWhatsAppConnection(userId, bot, reconnect = false, isRestor
         
         const statusCode = lastDisconnect?.error?.output?.statusCode;
         const disconnectReason = lastDisconnect?.error?.output?.payload?.message || "Unknown";
-        
-        console.log(`[DEBUG] Connection closed for userId ${userId}. Status code: ${statusCode}, Reason: ${disconnectReason}`);
         
         // Cek apakah perlu reconnect
         let shouldReconnect = true;
@@ -258,7 +227,6 @@ async function createWhatsAppConnection(userId, bot, reconnect = false, isRestor
           // Wait before reconnect
           setTimeout(async () => {
             if (userStates[userId]) {
-              console.log(`[DEBUG] Attempting to reconnect for userId: ${userId} (Attempt ${reconnectAttempts[userId]}/${MAX_RECONNECT_ATTEMPTS})`);
               await createWhatsAppConnection(userId, bot, true);
             }
           }, config.whatsapp.reconnectDelay || 5000);
@@ -280,7 +248,6 @@ async function createWhatsAppConnection(userId, bot, reconnect = false, isRestor
             const sessionPath = path.join(config.whatsapp.sessionPath, `wa_${userId}`);
             if (fs.existsSync(sessionPath)) {
               fs.rmSync(sessionPath, { recursive: true, force: true });
-              console.log(`Session files deleted for userId: ${userId}`);
             }
           }
           
@@ -309,16 +276,13 @@ async function createWhatsAppConnection(userId, bot, reconnect = false, isRestor
           [participant], // participant to approve
           'approve' // approve | reject
         );
-        console.log(`[DEBUG] Auto approved ${participant} for group ${id} via group.join-request`);
       } catch (err) {
-        console.error('[ERROR] Error auto accepting (group.join-request):', err);
+        // Silent fail
       }
     });
     
     return sock;
   } catch (err) {
-    console.error(`Error creating WhatsApp connection for ${userId}:`, err);
-    
     if (!reconnect && !isRestore) {
       await bot.sendMessage(
         userId,
@@ -344,9 +308,8 @@ async function saveUserSettings(userId) {
     };
     
     fs.writeFileSync(settingsPath, JSON.stringify(settings, null, 2));
-    console.log(`Settings saved for userId: ${userId}`);
   } catch (err) {
-    console.error(`Error saving settings for userId ${userId}:`, err);
+    // Silent fail
   }
 }
 
@@ -372,7 +335,7 @@ async function generatePairingCode(userId, phoneNumber, bot, messageId) {
     try {
       await bot.deleteMessage(userId, messageId);
     } catch (err) {
-      console.warn(`Could not delete loading message: ${err.message}`);
+      // Silent fail
     }
     
     // Request pairing code with options
@@ -394,13 +357,11 @@ async function generatePairingCode(userId, phoneNumber, bot, messageId) {
     
     return true;
   } catch (err) {
-    console.error(`Error generating pairing code for ${userId}:`, err);
-    
     // Delete loading message if exists
     try {
       await bot.deleteMessage(userId, messageId);
     } catch (delErr) {
-      console.warn(`Could not delete loading message: ${delErr.message}`);
+      // Silent fail
     }
     
     // Send error message
@@ -429,37 +390,29 @@ function setupAutoAcceptHandler(userId) {
   
   // Handle join requests
   sock.ev.on('group-participants.update', async (update) => {
-    console.log(`[DEBUG][${userId}] Group participants update:`, update);
-    
     // Check if auto accept is enabled
     if (!userStates[userId].autoAccept?.enabled) {
-      console.log(`[DEBUG][${userId}] Auto accept is disabled, skipping`);
       return;
     }
     
     const { id, participants, action } = update;
-    console.log(`[DEBUG][${userId}] Action: ${action}, Group: ${id}, Participants: ${participants.join(', ')}`);
     
     // Only process join_request action
     if (action !== 'join_request') {
-      console.log(`[DEBUG][${userId}] Not a join request, skipping`);
       return;
     }
     
     try {
       // Approve all join requests
       for (const jid of participants) {
-        console.log(`[DEBUG][${userId}] Attempting to approve ${jid} for group ${id}`);
         await sock.groupRequestParticipantsUpdate(
           id, // group id
           [jid], // participants to approve
           'approve' // approve | reject
         );
-        
-        console.log(`[DEBUG][${userId}] Successfully approved ${jid} for group ${id}`);
       }
     } catch (err) {
-      console.error(`[ERROR][${userId}] Error auto accepting:`, err);
+      // Silent fail
     }
   });
   
@@ -523,7 +476,6 @@ async function logoutWhatsApp(userId) {
     
     return true;
   } catch (err) {
-    console.error('Error logging out:', err);
     return false;
   }
 }
