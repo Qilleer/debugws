@@ -20,10 +20,14 @@ function isOwner(userId) {
 
 // Initialize bot - restore sessions on startup
 async function initializeBot() {
+  console.log('🔄 Restoring existing sessions...');
+  
   try {
     const restoredSessions = await restoreAllSessions(bot);
     
     if (restoredSessions.length > 0) {
+      console.log(`✅ Restored ${restoredSessions.length} sessions:`, restoredSessions);
+      
       // Notify owners about restored sessions
       for (const ownerId of config.telegram.owners) {
         try {
@@ -33,12 +37,14 @@ async function initializeBot() {
             { parse_mode: 'Markdown' }
           );
         } catch (err) {
-          // Silent fail
+          console.warn(`Could not notify owner ${ownerId}:`, err.message);
         }
       }
+    } else {
+      console.log('ℹ️ No existing sessions found');
     }
   } catch (err) {
-    // Silent fail
+    console.error('❌ Error restoring sessions:', err.message);
   }
 }
 
@@ -299,6 +305,6 @@ module.exports = { userStates };
 // Initialize bot with session restore
 initializeBot().then(() => {
   console.log('✅ Bot started! Send /start to begin.');
-}).catch(() => {
-  console.log('❌ Bot initialization failed');
+}).catch(err => {
+  console.error('❌ Bot initialization failed:', err);
 });
